@@ -89,6 +89,7 @@ app.get("/api/menuItems", async (req, res) => {
 });
 
 app.post("/api/submitOrder", async (req, res) => {
+  const apiProcessingStartTime = Date.now(); // Capture time at the start of API processing
   const db = await initDb();
   const { items, totalPrice, storeMetadata, requestStartTime } = req.body;
   const serializedItems = JSON.stringify(items);
@@ -98,32 +99,41 @@ app.post("/api/submitOrder", async (req, res) => {
     // Calculate Pub/Sub latency
     const pubSubStartTime = Date.now();
     const messageId = await pubSubClient
-      .topic("TopicRegionSouthAmerica")
+      .topic("TopicRegionUSA")
       .publish(
         Buffer.from(JSON.stringify({ items, totalPrice, storeMetadata }))
       );
     const pubSubEndTime = Date.now();
     const pubSubLatency = pubSubEndTime - pubSubStartTime;
+
+    // UI to API Latency (calculated as the difference between API processing start time and request start time sent from UI)
+    const uiToApiLatency = apiProcessingStartTime - requestStartTime;
+
+    // Total Round-trip Latency (calculated as the difference between total end time and request start time sent from UI)
     const totalEndTime = Date.now();
-    const totalLatency = totalEndTime - requestStartTime;
+    const totalRoundTripLatency = totalEndTime - requestStartTime;
+
     // Insert into database
     const result = await db.run(
-      "INSERT INTO orders (items, totalPrice, storeMetadata, latency,latency1) VALUES (?, ?, ?, ?,?)",
+      "INSERT INTO orders (items, totalPrice, storeMetadata, latency, latency1) VALUES (?, ?, ?, ?, ?)",
       serializedItems,
       totalPrice,
       serializedStoreMetadata,
-      `${pubSubLatency} ms`,
-      `${totalLatency} ms`
+      `${pubSubLatency} ms`, // This is the API to Pub/Sub latency
+      `${totalRoundTripLatency} ms` // This is the total round-trip latency
     );
+
+    // Observing the calculated latencies
     pubSubLatencyHistogram.observe(pubSubLatency);
-    totalLatencyHistogram.observe(totalLatency);
-    individualLatencyGauge.set(pubSubLatency);
-    totalLatencyGauge.set(totalLatency);
+    totalLatencyHistogram.observe(totalRoundTripLatency);
+
+    // Responding with the calculated latencies
     res.status(200).json({
       message: "Order successfully published",
       orderId: result.lastID,
-      pubSubLatency: `${pubSubLatency} ms`, // Pub/Sub operation latency
-      totalLatency: `${totalLatency} ms`, // Total round-trip latency
+      containerLatency: `${uiToApiLatency} ms`, // UI to API latency
+      pubSubLatency: `${pubSubLatency} ms`, // API to Pub/Sub latency
+      totalRoundTripLatency: `${totalRoundTripLatency} ms`, // Total round-trip latency
     });
   } catch (error) {
     console.error(`Error processing your order: ${error.message}`);
