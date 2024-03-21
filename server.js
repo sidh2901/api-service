@@ -28,8 +28,8 @@ const individualLatencyGauge = new client.Gauge({
   help: "Individual Pub/Sub latency",
 });
 const uiLatencyGauge = new client.Gauge({
-  name: "individual_pub_sub_latency",
-  help: "Individual Pub/Sub latency",
+  name: "ui_latency",
+  help: "UI latency",
 });
 const totalLatencyHistogram = new client.Histogram({
   name: "total_latency",
