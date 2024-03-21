@@ -27,7 +27,10 @@ const individualLatencyGauge = new client.Gauge({
   name: "individual_pub_sub_latency",
   help: "Individual Pub/Sub latency",
 });
-
+const uiLatencyGauge = new client.Gauge({
+  name: "individual_pub_sub_latency",
+  help: "Individual Pub/Sub latency",
+});
 const totalLatencyHistogram = new client.Histogram({
   name: "total_latency",
   help: "Histogram of total processing latency",
@@ -39,6 +42,7 @@ const totalLatencyGauge = new client.Gauge({
   help: "Api latency",
 });
 
+register.registerMetric(uiLatencyGauge);
 register.registerMetric(pubSubLatencyHistogram);
 register.registerMetric(totalLatencyHistogram);
 register.registerMetric(totalLatencyGauge);
@@ -125,6 +129,7 @@ app.post("/api/submitOrder", async (req, res) => {
 
     // Observing the calculated latencies
     pubSubLatencyHistogram.observe(pubSubLatency);
+    uiLatencyGauge.observe(uiToApiLatency);
     totalLatencyHistogram.observe(totalRoundTripLatency);
 
     // Responding with the calculated latencies
