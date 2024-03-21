@@ -103,7 +103,7 @@ app.post("/api/submitOrder", async (req, res) => {
     // Calculate Pub/Sub latency
     const pubSubStartTime = Date.now();
     const messageId = await pubSubClient
-      .topic("TopicRegionEurope")
+      .topic("TopicRegionUSA")
       .publish(
         Buffer.from(JSON.stringify({ items, totalPrice, storeMetadata }))
       );
