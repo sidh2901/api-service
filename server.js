@@ -129,8 +129,10 @@ app.post("/api/submitOrder", async (req, res) => {
 
     // Observing the calculated latencies
     pubSubLatencyHistogram.observe(pubSubLatency);
-    uiLatencyGauge.observe(uiToApiLatency);
     totalLatencyHistogram.observe(totalRoundTripLatency);
+    totalLatencyGauge.set(totalRoundTripLatency);
+    individualLatencyGauge.set(pubSubLatency);
+    uiLatencyGauge.set(uiToApiLatency);
 
     // Responding with the calculated latencies
     res.status(200).json({
