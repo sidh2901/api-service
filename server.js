@@ -2,6 +2,8 @@ const express = require("express");
 const client = require("prom-client");
 const sqlite3 = require("sqlite3");
 const { open } = require("sqlite");
+const http = require("http");
+const WebSocket = require("ws");
 const { PubSub } = require("@google-cloud/pubsub");
 const app = express();
 const cors = require("cors");
@@ -63,15 +65,19 @@ async function initDb() {
 
 // Endpoint: Get completed orders
 app.get("/api/getCompletedOrders", async (req, res) => {
+  console.log("Received request for /api/getCompletedOrders");
   const db = await initDb();
+  console.log("Database connection opened for /api/getCompletedOrders");
   try {
     const orders = await db.all("SELECT * FROM orders ORDER BY id DESC");
+    console.log(`Retrieved ${orders.length} orders from database`);
     const deserializedOrders = orders.map((order) => ({
       ...order,
       items: JSON.parse(order.items),
       storeMetadata: JSON.parse(order.storeMetadata),
     }));
     res.json(deserializedOrders);
+    console.log("Sent deserialized orders response");
   } catch (error) {
     console.error("Failed to retrieve orders:", error);
     res.status(500).json({ error: "Failed to load orders." });
@@ -80,10 +86,14 @@ app.get("/api/getCompletedOrders", async (req, res) => {
 
 // Endpoint: Get menu items
 app.get("/api/menuItems", async (req, res) => {
+  console.log("Received request for /api/menuItems");
   const db = await initDb();
+  console.log("Database connection opened for /api/menuItems");
   try {
     const menuItems = await db.all("SELECT * FROM menu_items");
+    console.log(`Retrieved ${menuItems.length} menu items from database`);
     res.status(200).json(menuItems);
+    console.log("Sent menu items response");
   } catch (error) {
     console.error("Failed to fetch menu items:", error);
     res
@@ -93,14 +103,18 @@ app.get("/api/menuItems", async (req, res) => {
 });
 
 app.post("/api/submitOrder", async (req, res) => {
+  console.log("Received request for /api/submitOrder");
+
   const apiProcessingStartTime = Date.now(); // Capture time at the start of API processing
+  console.log("API processing started for /api/submitOrder");
   const db = await initDb();
   const { items, totalPrice, storeMetadata, requestStartTime } = req.body;
   const serializedItems = JSON.stringify(items);
   const serializedStoreMetadata = JSON.stringify(storeMetadata);
 
   try {
-    // Calculate Pub/Sub latency
+    console.log("Publishing message to Pub/Sub");
+
     const pubSubStartTime = Date.now();
     const messageId = await pubSubClient
       .topic("TopicRegionUSA")
@@ -108,6 +122,8 @@ app.post("/api/submitOrder", async (req, res) => {
         Buffer.from(JSON.stringify({ items, totalPrice, storeMetadata }))
       );
     const pubSubEndTime = Date.now();
+    console.log("Message published to Pub/Sub");
+
     const pubSubLatency = pubSubEndTime - pubSubStartTime;
 
     // UI to API Latency (calculated as the difference between API processing start time and request start time sent from UI)
@@ -116,6 +132,9 @@ app.post("/api/submitOrder", async (req, res) => {
     // Total Round-trip Latency (calculated as the difference between total end time and request start time sent from UI)
     const totalEndTime = Date.now();
     const totalRoundTripLatency = totalEndTime - requestStartTime;
+    console.log(`Pub/Sub Latency: ${pubSubLatency}ms`);
+    console.log(`UI to API Latency: ${uiToApiLatency}ms`);
+    console.log(`Total Round-Trip Latency: ${totalRoundTripLatency}ms`);
 
     // Insert into database
     const result = await db.run(
@@ -126,6 +145,7 @@ app.post("/api/submitOrder", async (req, res) => {
       `${pubSubLatency} ms`, // This is the API to Pub/Sub latency
       `${totalRoundTripLatency} ms` // This is the total round-trip latency
     );
+    console.log("Order inserted into database");
 
     // Observing the calculated latencies
     pubSubLatencyHistogram.observe(pubSubLatency);
@@ -142,6 +162,7 @@ app.post("/api/submitOrder", async (req, res) => {
       pubSubLatency: `${pubSubLatency} ms`, // API to Pub/Sub latency
       totalRoundTripLatency: `${totalRoundTripLatency} ms`, // Total round-trip latency
     });
+    console.log("Sent response for /api/submitOrder");
   } catch (error) {
     console.error(`Error processing your order: ${error.message}`);
     res
@@ -153,5 +174,65 @@ app.get("/metrics", async (req, res) => {
   res.set("Content-Type", register.contentType);
   res.end(await register.metrics());
 });
+const subscriptionName = "store1-sub";
+const menuUpdateSubscription = pubSubClient.subscription(subscriptionName);
 
-app.listen(PORT, () => console.log(`API service running on port ${PORT}`));
+const updateMenuItemPriceInDb = async (itemName, newItemPrice) => {
+  const db = await initDb();
+  await db.run(
+    "UPDATE menu_items SET price = ? WHERE name = ?",
+    newItemPrice,
+    itemName
+  );
+};
+
+menuUpdateSubscription.on("message", async (message) => {
+  console.log("Received message:", message.data.toString());
+  const messageData = JSON.parse(message.data.toString());
+
+  // Check if both name and price are present in the message
+  if (!messageData || !messageData.name || messageData.price === undefined) {
+    console.error("Message is missing required fields (name and/or price).");
+    message.nack();
+    return;
+  }
+
+  const { name, price } = messageData;
+
+  // Additional validation for price could be performed here
+
+  try {
+    await updateMenuItemPriceInDb(name, price);
+    console.log(`Updated price for ${name} to ${price}`);
+    // Broadcast the update to all WebSocket clients
+    broadcastUpdate({ message: `Updated price for ${name} to ${price}` });
+    message.ack();
+  } catch (error) {
+    console.error("Failed to update database:", error);
+    message.nack();
+  }
+});
+
+// Create an HTTP server from the Express app
+const server = http.createServer(app);
+
+// Setup WebSocket server
+const wss = new WebSocket.Server({ server });
+
+wss.on("connection", (ws) => {
+  console.log("WebSocket connection established");
+});
+
+// Function to broadcast updates to all connected WebSocket clients
+const broadcastUpdate = (data) => {
+  wss.clients.forEach((client) => {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(JSON.stringify(data));
+    }
+  });
+};
+
+// Start the server
+server.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
