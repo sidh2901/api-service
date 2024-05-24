@@ -101,7 +101,7 @@ app.get("/api/menuItems", async (req, res) => {
       .json({ error: "Failed to load menu items from the database." });
   }
 });
-
+let lastOrderTimestamp = Date.now();
 app.post("/api/submitOrder", async (req, res) => {
   console.log("Received request for /api/submitOrder");
 
@@ -128,7 +128,6 @@ app.post("/api/submitOrder", async (req, res) => {
 
     // UI to API Latency (calculated as the difference between API processing start time and request start time sent from UI)
     const uiToApiLatency = apiProcessingStartTime - requestStartTime;
-
     // Total Round-trip Latency (calculated as the difference between total end time and request start time sent from UI)
     const totalEndTime = Date.now();
     const totalRoundTripLatency = totalEndTime - requestStartTime;
@@ -162,6 +161,7 @@ app.post("/api/submitOrder", async (req, res) => {
       pubSubLatency: `${pubSubLatency} ms`, // API to Pub/Sub latency
       totalRoundTripLatency: `${totalRoundTripLatency} ms`, // Total round-trip latency
     });
+    lastOrderTimestamp = Date.now();
     console.log("Sent response for /api/submitOrder");
   } catch (error) {
     console.error(`Error processing your order: ${error.message}`);
@@ -231,6 +231,17 @@ const broadcastUpdate = (data) => {
     }
   });
 };
+const IDLE_THRESHOLD = 2000; // 1 second
+
+setInterval(() => {
+  if (Date.now() - lastOrderTimestamp > IDLE_THRESHOLD) {
+    // Reset the gauges if no new orders have been submitted within the last second
+    totalLatencyGauge.set(0);
+    individualLatencyGauge.set(0);
+    uiLatencyGauge.set(0);
+    console.log("Metrics reset due to inactivity.");
+  }
+}, 2000); // Check every 1 second
 
 // Start the server
 server.listen(PORT, () => {
